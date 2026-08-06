@@ -1,0 +1,42 @@
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Test and coverage artifacts
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# Local environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# Local databases and runtime state
+inventory.db
+*.sqlite
+*.sqlite3
+
+# Generated logs and outputs
+*.log
+logs/
+artifacts/
+results/
+outputs/
+
+# IDE settings
+.vscode/
+.idea/
+
+# Temporary files
+*.tmp
+*.temp
+~$*
