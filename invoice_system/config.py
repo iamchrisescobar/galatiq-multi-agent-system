@@ -19,18 +19,17 @@ class LLMSettings:
     provider: LLMProvider
     model: str
     temperature: float
+    max_tokens: int
     timeout_seconds: float
     max_retries: int
 
     @classmethod
     def from_env(cls) -> "LLMSettings":
-        """
-        Load LLM configuration from environment variables.
-        """
+        """Load LLM configuration from environment variables."""
 
         load_dotenv()
 
-        provider = os.getenv("LLM_PROVIDER", "openai").strip().lower()
+        provider = os.getenv("LLM_PROVIDER", "xai").strip().lower()
 
         if provider not in {"openai", "xai"}:
             raise ConfigurationError(
@@ -40,34 +39,57 @@ class LLMSettings:
 
         default_models = {
             "openai": "gpt-4.1-mini",
-            "xai": "grok-4",
+            "xai": "grok-build-0.1",
         }
 
-        model = os.getenv("LLM_MODEL", default_models[provider]).strip()
+        model = os.getenv(
+            "LLM_MODEL",
+            default_models[provider],
+        ).strip()
 
         if not model:
             raise ConfigurationError("LLM_MODEL cannot be empty.")
 
         try:
-            temperature = float(os.getenv("LLM_TEMPERATURE", "0"))
+            temperature = float(
+                os.getenv("LLM_TEMPERATURE", "0")
+            )
         except ValueError as exc:
             raise ConfigurationError(
                 "LLM_TEMPERATURE must be a number."
             ) from exc
 
         try:
-            timeout_seconds = float(os.getenv("LLM_TIMEOUT_SECONDS", "60"))
+            max_tokens = int(
+                os.getenv("LLM_MAX_TOKENS", "2048")
+            )
+        except ValueError as exc:
+            raise ConfigurationError(
+                "LLM_MAX_TOKENS must be an integer."
+            ) from exc
+
+        try:
+            timeout_seconds = float(
+                os.getenv("LLM_TIMEOUT_SECONDS", "60")
+            )
         except ValueError as exc:
             raise ConfigurationError(
                 "LLM_TIMEOUT_SECONDS must be a number."
             ) from exc
 
         try:
-            max_retries = int(os.getenv("LLM_MAX_RETRIES", "2"))
+            max_retries = int(
+                os.getenv("LLM_MAX_RETRIES", "2")
+            )
         except ValueError as exc:
             raise ConfigurationError(
                 "LLM_MAX_RETRIES must be an integer."
             ) from exc
+
+        if max_tokens <= 0:
+            raise ConfigurationError(
+                "LLM_MAX_TOKENS must be greater than zero."
+            )
 
         if timeout_seconds <= 0:
             raise ConfigurationError(
@@ -83,6 +105,7 @@ class LLMSettings:
             provider=provider,
             model=model,
             temperature=temperature,
+            max_tokens=max_tokens,
             timeout_seconds=timeout_seconds,
             max_retries=max_retries,
         )
