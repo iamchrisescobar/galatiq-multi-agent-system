@@ -35,6 +35,7 @@ def create_chat_model(settings: LLMSettings) -> BaseChatModel:
         model=settings.model,
         model_provider=settings.provider,
         temperature=settings.temperature,
+        max_tokens=settings.max_tokens,
         timeout=settings.timeout_seconds,
         max_retries=settings.max_retries,
     )
