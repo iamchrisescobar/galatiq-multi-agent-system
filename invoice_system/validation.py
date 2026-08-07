@@ -2,17 +2,33 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import re
 
 from invoice_system.database import DEFAULT_DATABASE_PATH, lookup_inventory
 from invoice_system.models import Invoice, ValidationIssue, ValidationResult
 
 
+_TRAILING_QUALIFIER_RE = re.compile(
+    r"^(?P<base>.+?)\s*\((?P<qualifier>[^()]*)\)\s*$"
+)
+
+_OPERATIONAL_ITEM_QUALIFIERS = {
+    "rush",
+    "rush order",
+    "expedited",
+    "expedited order",
+    "replacement",
+    "sample",
+}
+
+
 @dataclass
 class _AggregatedLineItem:
-    """Combined quantity for one normalized product across invoice lines."""
+    """Combined quantity for one resolved product across invoice lines."""
 
     lookup_name: str
     requested_quantity: int
+    available_stock: int | None
 
 
 def validate_invoice(
@@ -107,18 +123,109 @@ def _validate_invoice_fields(
         )
 
 
+
+def _lookup_inventory_identity(
+    item_name: str,
+    database_path: str | Path,
+) -> tuple[str, int] | None:
+    """
+    Resolve exact inventory names first, then a whitespace-only variant.
+
+    The fallback is intentionally narrow: it removes internal whitespace but
+    does not alter punctuation, spelling, or arbitrary characters. This lets
+    OCR/presentation variants such as "Widget A" resolve to "WidgetA" while
+    avoiding fuzzy matching of genuinely unknown products.
+    """
+
+    exact_record = lookup_inventory(
+        item_name=item_name,
+        database_path=database_path,
+    )
+
+    if exact_record is not None:
+        return (
+            str(exact_record["item"]),
+            int(exact_record["stock"]),
+        )
+
+    compact_name = re.sub(r"\s+", "", item_name)
+
+    if compact_name.casefold() == item_name.casefold():
+        return None
+
+    compact_record = lookup_inventory(
+        item_name=compact_name,
+        database_path=database_path,
+    )
+
+    if compact_record is None:
+        return None
+
+    return (
+        str(compact_record["item"]),
+        int(compact_record["stock"]),
+    )
+
+
+def _resolve_inventory_identity(
+    item_name: str,
+    database_path: str | Path,
+) -> tuple[str, int] | None:
+    """
+    Resolve a line-item description to a canonical inventory identity.
+
+    Resolution is deliberately conservative:
+    1. exact inventory match,
+    2. whitespace-only normalization for OCR/presentation variants,
+    3. recognized operational qualifiers in trailing parentheses.
+
+    Product-like variants such as "WidgetA (XL)" are intentionally not
+    collapsed into WidgetA because doing so could silently map a distinct SKU.
+    """
+
+    direct_match = _lookup_inventory_identity(
+        item_name,
+        database_path,
+    )
+
+    if direct_match is not None:
+        return direct_match
+
+    match = _TRAILING_QUALIFIER_RE.fullmatch(item_name)
+
+    if match is None:
+        return None
+
+    qualifier = " ".join(
+        match.group("qualifier").casefold().split()
+    )
+
+    if qualifier not in _OPERATIONAL_ITEM_QUALIFIERS:
+        return None
+
+    base_name = match.group("base").strip()
+
+    if not base_name:
+        return None
+
+    return _lookup_inventory_identity(
+        base_name,
+        database_path,
+    )
+
+
 def _validate_items(
     invoice: Invoice,
     database_path: str | Path,
     issues: list[ValidationIssue],
 ) -> None:
     """
-    Validate line items after aggregating repeated product lines.
+    Resolve inventory identity, then aggregate repeated product lines.
 
     Inventory is shared across the whole invoice, so repeated lines for the
-    same product must consume stock cumulatively. For example, WidgetA
-    quantities of 15, 5, and 2 represent a total request of 22 units rather
-    than three independent requests against the same stock balance.
+    same canonical product must consume stock cumulatively. Operational
+    qualifiers such as "WidgetA (rush order)" may resolve to WidgetA when the
+    base item exists in inventory, allowing the quantities to be aggregated.
 
     Missing names and invalid quantities remain line-level data-integrity
     errors and are excluded from aggregation.
@@ -152,7 +259,18 @@ def _validate_items(
             )
             continue
 
-        lookup_name = item.name.strip()
+        raw_name = item.name.strip()
+        resolved = _resolve_inventory_identity(
+            raw_name,
+            database_path,
+        )
+
+        if resolved is None:
+            lookup_name = raw_name
+            available_stock = None
+        else:
+            lookup_name, available_stock = resolved
+
         normalized_key = lookup_name.casefold()
         existing_item = aggregated_items.get(normalized_key)
 
@@ -160,17 +278,22 @@ def _validate_items(
             aggregated_items[normalized_key] = _AggregatedLineItem(
                 lookup_name=lookup_name,
                 requested_quantity=item.quantity,
+                available_stock=available_stock,
             )
         else:
             existing_item.requested_quantity += item.quantity
 
-    for aggregated_item in aggregated_items.values():
-        inventory_record = lookup_inventory(
-            item_name=aggregated_item.lookup_name,
-            database_path=database_path,
-        )
+            # A canonical inventory resolution takes precedence if an earlier
+            # unresolved spelling/description happened to share the same key.
+            if (
+                existing_item.available_stock is None
+                and available_stock is not None
+            ):
+                existing_item.lookup_name = lookup_name
+                existing_item.available_stock = available_stock
 
-        if inventory_record is None:
+    for aggregated_item in aggregated_items.values():
+        if aggregated_item.available_stock is None:
             issues.append(
                 ValidationIssue(
                     code="unknown_item",
@@ -183,8 +306,8 @@ def _validate_items(
             )
             continue
 
-        available_stock = int(inventory_record["stock"])
-        canonical_item_name = str(inventory_record["item"])
+        available_stock = aggregated_item.available_stock
+        canonical_item_name = aggregated_item.lookup_name
 
         if available_stock <= 0:
             issues.append(

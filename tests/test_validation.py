@@ -303,3 +303,146 @@ def test_repeated_item_case_variants_are_aggregated(
     assert issue.item == "WidgetA"
     assert issue.requested_quantity == 16
     assert issue.available_stock == 15
+
+
+
+def test_operational_parenthetical_qualifier_resolves_to_base_inventory_item(
+    inventory_database: Path,
+) -> None:
+    """INV-1010 rush-order text is a qualifier, not a separate SKU."""
+
+    invoice = make_invoice(
+        invoice_number="INV-1010",
+        amount=Decimal("7185.00"),
+        items=[
+            InvoiceItem(name="WidgetA", quantity=8),
+            InvoiceItem(name="WidgetB", quantity=4),
+            InvoiceItem(name="GadgetX", quantity=2),
+            InvoiceItem(name="WidgetA (rush order)", quantity=4),
+        ],
+    )
+
+    result = validate_invoice(invoice, inventory_database)
+
+    # WidgetA resolves to 8 + 4 = 12, which is within stock of 15.
+    assert result.passed is True
+    assert result.issues == []
+
+
+def test_operational_qualifier_resolves_even_without_duplicate_base_line(
+    inventory_database: Path,
+) -> None:
+    invoice = make_invoice(
+        items=[
+            InvoiceItem(
+                name="WidgetA (rush order)",
+                quantity=4,
+            )
+        ],
+    )
+
+    result = validate_invoice(invoice, inventory_database)
+
+    assert result.passed is True
+    assert result.issues == []
+
+
+def test_unknown_parenthetical_product_variant_is_not_silently_collapsed(
+    inventory_database: Path,
+) -> None:
+    """Unknown product variants remain unknown unless explicitly supported."""
+
+    invoice = make_invoice(
+        items=[
+            InvoiceItem(
+                name="WidgetA (XL)",
+                quantity=1,
+            )
+        ],
+    )
+
+    result = validate_invoice(invoice, inventory_database)
+
+    assert result.passed is False
+    assert len(result.issues) == 1
+    assert result.issues[0].code == "unknown_item"
+    assert result.issues[0].item == "WidgetA (XL)"
+
+
+
+def test_inv_1012_whitespace_item_variants_resolve_to_inventory(
+    inventory_database: Path,
+) -> None:
+    """Messy invoice spacing should not create false unknown products."""
+
+    invoice = make_invoice(
+        invoice_number="INV 1012",
+        amount=Decimal("9975.00"),
+        items=[
+            InvoiceItem(name="Widget A", quantity=12),
+            InvoiceItem(name="WidgetB", quantity=7),
+            InvoiceItem(name="Gadget X", quantity=4),
+        ],
+    )
+
+    result = validate_invoice(invoice, inventory_database)
+
+    assert result.passed is True
+    assert result.issues == []
+
+
+def test_whitespace_variant_aggregates_with_canonical_inventory_name(
+    inventory_database: Path,
+) -> None:
+    invoice = make_invoice(
+        items=[
+            InvoiceItem(name="WidgetA", quantity=10),
+            InvoiceItem(name="Widget A", quantity=6),
+        ],
+    )
+
+    result = validate_invoice(invoice, inventory_database)
+
+    assert result.passed is False
+    assert len(result.issues) == 1
+
+    issue = result.issues[0]
+    assert issue.code == "insufficient_stock"
+    assert issue.item == "WidgetA"
+    assert issue.requested_quantity == 16
+    assert issue.available_stock == 15
+
+
+def test_spaced_unknown_item_remains_unknown(
+    inventory_database: Path,
+) -> None:
+    invoice = make_invoice(
+        items=[
+            InvoiceItem(name="Super Gizmo", quantity=1),
+        ],
+    )
+
+    result = validate_invoice(invoice, inventory_database)
+
+    assert result.passed is False
+    assert len(result.issues) == 1
+    assert result.issues[0].code == "unknown_item"
+    assert result.issues[0].item == "Super Gizmo"
+
+
+def test_spaced_base_name_with_operational_qualifier_resolves(
+    inventory_database: Path,
+) -> None:
+    invoice = make_invoice(
+        items=[
+            InvoiceItem(
+                name="Widget A (rush order)",
+                quantity=4,
+            )
+        ],
+    )
+
+    result = validate_invoice(invoice, inventory_database)
+
+    assert result.passed is True
+    assert result.issues == []
