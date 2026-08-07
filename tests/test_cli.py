@@ -52,7 +52,7 @@ def test_default_output_for_paid_invoice_is_business_focused():
 
     assert "Outcome:   PAID" in output
     assert "Risk:      LOW" in output
-    assert "$5,000.00 paid to Widgets Inc." in output
+    assert "Paid $5,000.00 to Widgets Inc." in output
     assert "Processing time: 12.35s" in output
     assert "Technical Details" not in output
     assert "Approval policy" not in output
