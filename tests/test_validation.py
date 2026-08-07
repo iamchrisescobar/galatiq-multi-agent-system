@@ -220,3 +220,86 @@ def test_due_date_before_invoice_date_is_rejected(
         issue.message
         == "Due date 2026-02-01 cannot be earlier than invoice date 2026-02-15."
     )
+
+def test_repeated_line_items_are_aggregated_before_stock_validation(
+    inventory_database: Path,
+) -> None:
+    """INV-1013-style repeated lines must consume inventory cumulatively."""
+
+    invoice = make_invoice(
+        invoice_number="INV-1013",
+        amount=Decimal("22562.80"),
+        items=[
+            InvoiceItem(name="WidgetA", quantity=15),
+            InvoiceItem(name="WidgetB", quantity=10),
+            InvoiceItem(name="GadgetX", quantity=5),
+            InvoiceItem(name="WidgetA", quantity=5),
+            InvoiceItem(name="WidgetB", quantity=8),
+            InvoiceItem(name="GadgetX", quantity=3),
+            InvoiceItem(name="WidgetA", quantity=2),
+            InvoiceItem(name="GadgetX", quantity=1),
+        ],
+    )
+
+    result = validate_invoice(invoice, inventory_database)
+
+    assert result.passed is False
+    assert len(result.issues) == 3
+
+    issues_by_item = {
+        issue.item: issue
+        for issue in result.issues
+    }
+
+    widget_a_issue = issues_by_item["WidgetA"]
+    assert widget_a_issue.code == "insufficient_stock"
+    assert widget_a_issue.requested_quantity == 22
+    assert widget_a_issue.available_stock == 15
+
+    widget_b_issue = issues_by_item["WidgetB"]
+    assert widget_b_issue.code == "insufficient_stock"
+    assert widget_b_issue.requested_quantity == 18
+    assert widget_b_issue.available_stock == 10
+
+    gadget_x_issue = issues_by_item["GadgetX"]
+    assert gadget_x_issue.code == "insufficient_stock"
+    assert gadget_x_issue.requested_quantity == 9
+    assert gadget_x_issue.available_stock == 5
+
+
+def test_repeated_line_items_pass_when_combined_quantity_is_within_stock(
+    inventory_database: Path,
+) -> None:
+    invoice = make_invoice(
+        items=[
+            InvoiceItem(name="WidgetA", quantity=8),
+            InvoiceItem(name="WidgetA", quantity=7),
+        ],
+    )
+
+    result = validate_invoice(invoice, inventory_database)
+
+    assert result.passed is True
+    assert result.issues == []
+
+
+def test_repeated_item_case_variants_are_aggregated(
+    inventory_database: Path,
+) -> None:
+    invoice = make_invoice(
+        items=[
+            InvoiceItem(name="WidgetA", quantity=10),
+            InvoiceItem(name="  widgeta  ", quantity=6),
+        ],
+    )
+
+    result = validate_invoice(invoice, inventory_database)
+
+    assert result.passed is False
+    assert len(result.issues) == 1
+
+    issue = result.issues[0]
+    assert issue.code == "insufficient_stock"
+    assert issue.item == "WidgetA"
+    assert issue.requested_quantity == 16
+    assert issue.available_stock == 15
