@@ -28,7 +28,7 @@ SAMPLE_INVOICE = (
     PROJECT_ROOT
     / "data"
     / "invoices"
-    / "invoice_1002.txt"
+    / "invoice_1013.json"
 )
 
 DATABASE_PATH = PROJECT_ROOT / "inventory.db"

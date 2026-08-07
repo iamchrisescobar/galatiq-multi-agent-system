@@ -1,9 +1,18 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 from invoice_system.database import DEFAULT_DATABASE_PATH, lookup_inventory
 from invoice_system.models import Invoice, ValidationIssue, ValidationResult
+
+
+@dataclass
+class _AggregatedLineItem:
+    """Combined quantity for one normalized product across invoice lines."""
+
+    lookup_name: str
+    requested_quantity: int
 
 
 def validate_invoice(
@@ -51,10 +60,13 @@ def _validate_invoice_fields(
         issues.append(
             ValidationIssue(
                 code="invalid_amount",
-                message=f"Invoice amount must be positive and non-zero; received {invoice.amount}.",
+                message=(
+                    "Invoice amount must be positive and non-zero; "
+                    f"received {invoice.amount}."
+                ),
             )
         )
-        
+
     if invoice.invoice_date is None:
         issues.append(
             ValidationIssue(
@@ -100,9 +112,21 @@ def _validate_items(
     database_path: str | Path,
     issues: list[ValidationIssue],
 ) -> None:
-    for position, item in enumerate(invoice.items, start=1):
-        item_label = item.name or f"line item {position}"
+    """
+    Validate line items after aggregating repeated product lines.
 
+    Inventory is shared across the whole invoice, so repeated lines for the
+    same product must consume stock cumulatively. For example, WidgetA
+    quantities of 15, 5, and 2 represent a total request of 22 units rather
+    than three independent requests against the same stock balance.
+
+    Missing names and invalid quantities remain line-level data-integrity
+    errors and are excluded from aggregation.
+    """
+
+    aggregated_items: dict[str, _AggregatedLineItem] = {}
+
+    for position, item in enumerate(invoice.items, start=1):
         if not item.name or not item.name.strip():
             issues.append(
                 ValidationIssue(
@@ -128,8 +152,21 @@ def _validate_items(
             )
             continue
 
+        lookup_name = item.name.strip()
+        normalized_key = lookup_name.casefold()
+        existing_item = aggregated_items.get(normalized_key)
+
+        if existing_item is None:
+            aggregated_items[normalized_key] = _AggregatedLineItem(
+                lookup_name=lookup_name,
+                requested_quantity=item.quantity,
+            )
+        else:
+            existing_item.requested_quantity += item.quantity
+
+    for aggregated_item in aggregated_items.values():
         inventory_record = lookup_inventory(
-            item_name=item.name,
+            item_name=aggregated_item.lookup_name,
             database_path=database_path,
         )
 
@@ -137,9 +174,11 @@ def _validate_items(
             issues.append(
                 ValidationIssue(
                     code="unknown_item",
-                    item=item.name,
-                    requested_quantity=item.quantity,
-                    message=f"{item.name} was not found in inventory.",
+                    item=aggregated_item.lookup_name,
+                    requested_quantity=aggregated_item.requested_quantity,
+                    message=(
+                        f"{aggregated_item.lookup_name} was not found in inventory."
+                    ),
                 )
             )
             continue
@@ -152,24 +191,24 @@ def _validate_items(
                 ValidationIssue(
                     code="out_of_stock",
                     item=canonical_item_name,
-                    requested_quantity=item.quantity,
+                    requested_quantity=aggregated_item.requested_quantity,
                     available_stock=available_stock,
                     message=f"{canonical_item_name} is out of stock.",
                 )
             )
             continue
 
-        if item.quantity > available_stock:
+        if aggregated_item.requested_quantity > available_stock:
             issues.append(
                 ValidationIssue(
                     code="insufficient_stock",
                     item=canonical_item_name,
-                    requested_quantity=item.quantity,
+                    requested_quantity=aggregated_item.requested_quantity,
                     available_stock=available_stock,
                     message=(
                         f"{canonical_item_name} requested quantity "
-                        f"{item.quantity} exceeds available stock "
-                        f"{available_stock}."
+                        f"{aggregated_item.requested_quantity} exceeds available "
+                        f"stock {available_stock}."
                     ),
                 )
             )
