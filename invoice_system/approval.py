@@ -142,10 +142,12 @@ def assess_approval_policy(
         scrutiny_threshold=scrutiny_threshold,
         invoice_amount=invoice_amount,
         validation_passed=validation_result.passed,
-        validation_issue_codes=[
-            issue.code
-            for issue in validation_result.issues
-        ],
+        validation_issue_codes=list(
+            dict.fromkeys(
+                issue.code
+                for issue in validation_result.issues
+            )
+        ),
         amount_over_threshold=amount_over_threshold,
         requires_additional_scrutiny=requires_additional_scrutiny,
         base_recommendation=base_recommendation,
