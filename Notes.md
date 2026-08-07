@@ -47,3 +47,11 @@ Structured extraction:
   "invoice_date": "2026-01-15",
   "due_date": "2026-02-01"
 }
+
+IMPORTANT: validation currently checks inventory line by line, rather than aggregating duplicate products.
+
+For example, INV-1013 contains multiple entries for the same products. The supplied invoice has repeated WidgetA, WidgetB, and GadgetX lines.
+
+change max_revisions = 2  to = 1 in workflow.py?
+
+files with a 1 at the start are the old ones
