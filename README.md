@@ -52,10 +52,30 @@ The approval revision loop is bounded to prevent infinite agent cycles.
 
 ## Run locally
 
+For Windows, create virtual environment:
+```bash
+$ python -m venv .venv
+```
+
+activate using Windows/Git Bash:
+```bash
+$ source .venv/Scripts/activate
+```
+
 Requires Python and an xAI API key.
 
 ```bash
 pip install -r requirements.txt
+```
+
+To initialized the database with the seed data:
+```bash
+python -m invoice_system.database
+```
+
+Inspect the database:
+```bash
+sqlite3 inventory.db "SELECT item, stock FROM inventory;"
 ```
 
 Set your llm provider, model, model configuration and API key in your .env file. Refer to .env.example:
@@ -87,11 +107,6 @@ For a more technical view, including extracted data, policy assessment, agent de
 
 ```bash
 python main.py --invoice_path=data/invoices/invoice_1001.txt --verbose
-```
-
-To initialized the database with the seed data:
-```bash
-python -m invoice_system.database
 ```
 
 ## Example outcomes
