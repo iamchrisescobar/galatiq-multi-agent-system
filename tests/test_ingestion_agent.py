@@ -149,3 +149,120 @@ def test_ingestion_agent_rejects_empty_document() -> None:
         agent.extract("   ")
 
     assert model.structured_model.invocation_count == 0
+
+
+def test_ingestion_normalizes_ocr_month_name_dates_before_model_call() -> None:
+    expected = Invoice(
+        invoice_number="INV 1012",
+        vendor="QuickShip Distributers",
+        amount=Decimal("9975.00"),
+        invoice_date=date(2026, 1, 26),
+        due_date=date(2026, 2, 25),
+        items=[
+            InvoiceItem(name="WidgetA", quantity=12),
+        ],
+    )
+
+    model = StubChatModel([expected])
+    agent = IngestionAgent(model)  # type: ignore[arg-type]
+
+    agent.extract(
+        """
+        INV NO: INV 1012
+        DATE: 26-Jan-2O26
+        DUE: 25-Feb-2026
+        """
+    )
+
+    messages = model.structured_model.received_messages[0]
+    document_message = messages[1].content
+
+    assert "DATE: 2026-01-26" in document_message
+    assert "DUE: 2026-02-25" in document_message
+    assert "2601-01-26" not in document_message
+
+
+def test_ingestion_normalizes_month_first_text_date() -> None:
+    expected = Invoice(
+        invoice_number="INV-DATE",
+        vendor="Example Vendor",
+        amount=Decimal("100.00"),
+        invoice_date=date(2026, 1, 27),
+        due_date=date(2026, 2, 27),
+        items=[],
+    )
+
+    model = StubChatModel([expected])
+    agent = IngestionAgent(model)  # type: ignore[arg-type]
+
+    agent.extract(
+        """
+        Date: January 27, 2O26
+        Due Date: February 27, 2026
+        """
+    )
+
+    messages = model.structured_model.received_messages[0]
+    document_message = messages[1].content
+
+    assert "Date: 2026-01-27" in document_message
+    assert "Due Date: 2026-02-27" in document_message
+
+
+def test_ingestion_corrects_ocr_digits_in_numeric_date_without_reordering() -> None:
+    expected = Invoice(
+        invoice_number="INV-DATE",
+        vendor="Example Vendor",
+        amount=Decimal("100.00"),
+        invoice_date=date(2026, 1, 28),
+        due_date=date(2026, 2, 28),
+        items=[],
+    )
+
+    model = StubChatModel([expected])
+    agent = IngestionAgent(model)  # type: ignore[arg-type]
+
+    agent.extract(
+        """
+        Date: O1/28/2O26
+        Due Date: 02/28/2026
+        """
+    )
+
+    messages = model.structured_model.received_messages[0]
+    document_message = messages[1].content
+
+    assert "Date: 01/28/2026" in document_message
+    assert "Due Date: 02/28/2026" in document_message
+
+
+def test_ingestion_date_normalization_does_not_mutate_arbitrary_identifiers() -> None:
+    expected = Invoice(
+        invoice_number="INV-A1O2",
+        vendor="Example Vendor",
+        amount=Decimal("100.00"),
+        invoice_date=date(2026, 1, 26),
+        due_date=date(2026, 2, 26),
+        items=[
+            InvoiceItem(name="Part-A1O2", quantity=1),
+        ],
+    )
+
+    model = StubChatModel([expected])
+    agent = IngestionAgent(model)  # type: ignore[arg-type]
+
+    agent.extract(
+        """
+        Invoice: INV-A1O2
+        Date: 26-Jan-2O26
+        Due: 26-Feb-2026
+        Item: Part-A1O2
+        """
+    )
+
+    messages = model.structured_model.received_messages[0]
+    document_message = messages[1].content
+
+    assert "INV-A1O2" in document_message
+    assert "Part-A1O2" in document_message
+    assert "2026-01-26" in document_message
