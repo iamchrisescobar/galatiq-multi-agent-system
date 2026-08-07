@@ -54,4 +54,50 @@ For example, INV-1013 contains multiple entries for the same products. The suppl
 
 change max_revisions = 2  to = 1 in workflow.py?
 
-files with a 1 at the start are the old ones
+
+Current workflow:
+
+Document Loading
+       ↓
+Ingestion
+       ↓
+Validation
+       ↓
+Approval Policy
+       ↓
+Approval Agent
+       ↓
+Approval Critic
+    ┌──┴───────────────┐
+ accept              revise
+    │                   │
+    │            Approval Agent
+    │                   │
+    │              Critic again
+    │                   │
+    │          revisions exhausted?
+    │                   │
+    │              MANUAL REVIEW
+    │                   │
+    │        write manual_reviews.jsonl
+    │                   │
+    │                  END
+    ↓
+Approval Finalization
+       ↓
+  final decision
+   /          \
+approve      reject
+  ↓            ↓
+Payment      Rejection Handler
+  ↓            ↓
+payment      write
+result       rejections.jsonl
+  ↓            ↓
+COMPLETED    COMPLETED
+
+Need to work on:
+fix line by line validation of items
+add entry point (main)
+add verbose for entry point
+add option to --list-manual-reviews

@@ -28,10 +28,14 @@ SAMPLE_INVOICE = (
     PROJECT_ROOT
     / "data"
     / "invoices"
-    / "invoice_1005.json"
+    / "invoice_1002.txt"
 )
 
 DATABASE_PATH = PROJECT_ROOT / "inventory.db"
+REJECTION_LOG_PATH = PROJECT_ROOT / "data" / "rejections.jsonl"
+MANUAL_REVIEW_LOG_PATH = (
+    PROJECT_ROOT / "data" / "manual_reviews.jsonl"
+)
 
 
 def main() -> None:
@@ -63,6 +67,8 @@ def main() -> None:
         approval_critic,
         database_path=DATABASE_PATH,
         max_approval_revisions=2,
+        rejection_log_path=REJECTION_LOG_PATH,
+        manual_review_log_path=MANUAL_REVIEW_LOG_PATH,
     )
 
     result = run_invoice_workflow(
@@ -110,6 +116,26 @@ def main() -> None:
         "\nApproval revisions: "
         f"{result.get('approval_revision_count', 0)}"
     )
+
+    payment_result = result.get("payment_result")
+
+    if payment_result is not None:
+        print("\nPayment result")
+        print(payment_result.model_dump_json(indent=2))
+
+    rejection_record = result.get("rejection_record")
+
+    if rejection_record is not None:
+        print("\nRejection record")
+        print(rejection_record.model_dump_json(indent=2))
+        print(f"Rejection log: {REJECTION_LOG_PATH}")
+
+    manual_review_record = result.get("manual_review_record")
+
+    if manual_review_record is not None:
+        print("\nManual review work item")
+        print(manual_review_record.model_dump_json(indent=2))
+        print(f"Manual review log: {MANUAL_REVIEW_LOG_PATH}")
 
     print("\nAudit events")
 

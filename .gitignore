@@ -40,3 +40,6 @@ outputs/
 *.tmp
 *.temp
 ~$*
+# Invoice workflow runtime queues
+data/rejections.jsonl
+data/manual_reviews.jsonl

@@ -12,6 +12,11 @@ from invoice_system.approval import (
 )
 from invoice_system.documents import LoadedDocument
 from invoice_system.models import Invoice, ValidationResult
+from invoice_system.outcome_records import (
+    ManualReviewRecord,
+    RejectionRecord,
+)
+from invoice_system.payment import PaymentResult
 
 
 ProcessingStage = Literal[
@@ -22,6 +27,8 @@ ProcessingStage = Literal[
     "approval_decision",
     "approval_critique",
     "approval_finalization",
+    "payment",
+    "rejection_handling",
     "manual_review",
 ]
 
@@ -33,6 +40,8 @@ CurrentStage = Literal[
     "approval_decision",
     "approval_critique",
     "approval_finalization",
+    "payment",
+    "rejection_handling",
     "manual_review",
     "completed",
 ]
@@ -96,6 +105,10 @@ class WorkflowState(TypedDict, total=False):
     approval_decision: ApprovalDecision
     approval_critique: ApprovalCritique
     approval_revision_count: int
+
+    payment_result: PaymentResult
+    rejection_record: RejectionRecord
+    manual_review_record: ManualReviewRecord
 
     current_stage: CurrentStage
     status: WorkflowStatus
