@@ -7,6 +7,13 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 from invoice_system.documents import load_document
+from invoice_system.outcome_records import (
+    DEFAULT_MANUAL_REVIEW_LOG_PATH,
+    DEFAULT_REJECTION_LOG_PATH,
+    log_manual_review,
+    log_rejection,
+)
+from invoice_system.payment import mock_payment
 from invoice_system.validation import validate_invoice
 from invoice_system.workflow_nodes import (
     ApprovalDecider,
@@ -14,6 +21,9 @@ from invoice_system.workflow_nodes import (
     DocumentLoader,
     InvoiceExtractor,
     InvoiceValidator,
+    ManualReviewLogger,
+    PaymentProcessor,
+    RejectionLogger,
     WorkflowDependencies,
     WorkflowNodes,
 )
@@ -29,6 +39,12 @@ ApprovalRoute = Literal[
     "accept",
     "revise",
     "manual_review",
+    "stop",
+]
+
+FinalDecisionRoute = Literal[
+    "payment",
+    "rejection",
     "stop",
 ]
 
@@ -75,6 +91,32 @@ def route_after_approval_critique(
     return "revise"
 
 
+def route_after_approval_finalization(
+    state: WorkflowState,
+) -> FinalDecisionRoute:
+    """Route a critic-accepted final decision to its terminal handler."""
+
+    if state.get("status") == "failed":
+        return "stop"
+
+    decision = state.get("approval_decision")
+
+    if decision is None:
+        raise RuntimeError(
+            "Approval decision is missing from workflow state."
+        )
+
+    if decision.decision == "approve":
+        return "payment"
+
+    if decision.decision == "reject":
+        return "rejection"
+
+    raise RuntimeError(
+        f"Unsupported final approval decision: {decision.decision}."
+    )
+
+
 def build_invoice_workflow(
     ingestion_agent: InvoiceExtractor,
     approval_agent: ApprovalDecider,
@@ -82,6 +124,11 @@ def build_invoice_workflow(
     *,
     database_path: str | Path,
     max_approval_revisions: int = 2,
+    payment_processor: PaymentProcessor = mock_payment,
+    rejection_logger: RejectionLogger = log_rejection,
+    manual_review_logger: ManualReviewLogger = log_manual_review,
+    rejection_log_path: str | Path = DEFAULT_REJECTION_LOG_PATH,
+    manual_review_log_path: str | Path = DEFAULT_MANUAL_REVIEW_LOG_PATH,
     document_loader: DocumentLoader = load_document,
     invoice_validator: InvoiceValidator = validate_invoice,
 ) -> CompiledStateGraph:
@@ -97,6 +144,11 @@ def build_invoice_workflow(
         approval_agent=approval_agent,
         approval_critic=approval_critic,
         database_path=database_path,
+        payment_processor=payment_processor,
+        rejection_logger=rejection_logger,
+        manual_review_logger=manual_review_logger,
+        rejection_log_path=rejection_log_path,
+        manual_review_log_path=manual_review_log_path,
         document_loader=document_loader,
         invoice_validator=invoice_validator,
     )
@@ -132,6 +184,14 @@ def build_invoice_workflow(
     builder.add_node(
         "finalize_approval",
         nodes.finalize_approval,
+    )
+    builder.add_node(
+        "process_payment",
+        nodes.process_payment,
+    )
+    builder.add_node(
+        "handle_rejection",
+        nodes.handle_rejection,
     )
     builder.add_node(
         "manual_review",
@@ -207,8 +267,23 @@ def build_invoice_workflow(
         },
     )
 
-    builder.add_edge(
+    builder.add_conditional_edges(
         "finalize_approval",
+        route_after_approval_finalization,
+        {
+            "payment": "process_payment",
+            "rejection": "handle_rejection",
+            "stop": END,
+        },
+    )
+
+    builder.add_edge(
+        "process_payment",
+        END,
+    )
+
+    builder.add_edge(
+        "handle_rejection",
         END,
     )
 
