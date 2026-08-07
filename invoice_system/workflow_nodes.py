@@ -6,6 +6,12 @@ from pathlib import Path
 from time import perf_counter
 from typing import Protocol
 
+from invoice_system.approval import (
+    ApprovalCritique,
+    ApprovalDecision,
+    ApprovalPolicyAssessment,
+    assess_approval_policy,
+)
 from invoice_system.documents import (
     LoadedDocument,
     load_document,
@@ -21,14 +27,37 @@ from invoice_system.workflow_state import (
 
 
 class InvoiceExtractor(Protocol):
-    """
-    Interface required from an ingestion agent.
-
-    IngestionAgent already satisfies this protocol because it provides
-    extract(document_text) -> Invoice.
-    """
+    """Interface required from an ingestion agent."""
 
     def extract(self, document_text: str) -> Invoice:
+        ...
+
+
+class ApprovalDecider(Protocol):
+    """Interface required from the approval agent."""
+
+    def decide(
+        self,
+        invoice: Invoice,
+        validation_result: ValidationResult,
+        policy: ApprovalPolicyAssessment,
+        *,
+        prior_decision: ApprovalDecision | None = None,
+        critique: ApprovalCritique | None = None,
+    ) -> ApprovalDecision:
+        ...
+
+
+class ApprovalReviewer(Protocol):
+    """Interface required from the independent approval critic."""
+
+    def review(
+        self,
+        invoice: Invoice,
+        validation_result: ValidationResult,
+        policy: ApprovalPolicyAssessment,
+        decision: ApprovalDecision,
+    ) -> ApprovalCritique:
         ...
 
 
@@ -45,13 +74,15 @@ class WorkflowDependencies:
     """Dependencies injected into workflow nodes."""
 
     ingestion_agent: InvoiceExtractor
+    approval_agent: ApprovalDecider
+    approval_critic: ApprovalReviewer
     database_path: str | Path
     document_loader: DocumentLoader = load_document
     invoice_validator: InvoiceValidator = validate_invoice
 
 
 class WorkflowNodes:
-    """Deterministic node implementations for the invoice workflow."""
+    """Node implementations for the invoice workflow."""
 
     def __init__(
         self,
@@ -205,8 +236,308 @@ class WorkflowNodes:
 
         return {
             "validation_result": validation_result,
+            "current_stage": "validation",
+            "status": "running",
+            "audit_events": [
+                *state.get("audit_events", []),
+                event,
+            ],
+        }
+
+    def assess_approval(
+        self,
+        state: WorkflowState,
+    ) -> WorkflowState:
+        """Derive deterministic approval policy facts."""
+
+        started_at = perf_counter()
+
+        try:
+            invoice = state.get("invoice")
+            validation_result = state.get("validation_result")
+
+            if invoice is None:
+                raise ValueError(
+                    "Workflow state does not contain an invoice."
+                )
+
+            if validation_result is None:
+                raise ValueError(
+                    "Workflow state does not contain a validation result."
+                )
+
+            policy = assess_approval_policy(
+                invoice,
+                validation_result,
+            )
+
+        except Exception as exc:
+            return self._failure_update(
+                state=state,
+                stage="approval_policy",
+                started_at=started_at,
+                exc=exc,
+            )
+
+        event = AuditEvent(
+            stage="approval_policy",
+            status="succeeded",
+            message=(
+                "Approval policy assessed. "
+                f"Base recommendation: {policy.base_recommendation}; "
+                "additional scrutiny required: "
+                f"{policy.requires_additional_scrutiny}."
+            ),
+            duration_ms=self._elapsed_ms(started_at),
+        )
+
+        return {
+            "approval_policy": policy,
+            "current_stage": "approval_policy",
+            "status": "running",
+            "audit_events": [
+                *state.get("audit_events", []),
+                event,
+            ],
+        }
+
+    def make_approval_decision(
+        self,
+        state: WorkflowState,
+    ) -> WorkflowState:
+        """Produce an initial or critic-directed approval decision."""
+
+        started_at = perf_counter()
+
+        try:
+            invoice = state.get("invoice")
+            validation_result = state.get("validation_result")
+            policy = state.get("approval_policy")
+
+            if invoice is None:
+                raise ValueError(
+                    "Workflow state does not contain an invoice."
+                )
+
+            if validation_result is None:
+                raise ValueError(
+                    "Workflow state does not contain a validation result."
+                )
+
+            if policy is None:
+                raise ValueError(
+                    "Workflow state does not contain an approval policy."
+                )
+
+            prior_decision = state.get("approval_decision")
+            critique = state.get("approval_critique")
+
+            is_revision = (
+                prior_decision is not None
+                and critique is not None
+                and critique.verdict == "revise"
+            )
+
+            decision = self._dependencies.approval_agent.decide(
+                invoice,
+                validation_result,
+                policy,
+                prior_decision=(
+                    prior_decision
+                    if is_revision
+                    else None
+                ),
+                critique=(
+                    critique
+                    if is_revision
+                    else None
+                ),
+            )
+
+            revision_count = state.get(
+                "approval_revision_count",
+                0,
+            )
+
+            if is_revision:
+                revision_count += 1
+
+        except Exception as exc:
+            return self._failure_update(
+                state=state,
+                stage="approval_decision",
+                started_at=started_at,
+                exc=exc,
+            )
+
+        event = AuditEvent(
+            stage="approval_decision",
+            status="succeeded",
+            message=(
+                f"Approval agent proposed {decision.decision} "
+                f"at {decision.risk_level} risk."
+            ),
+            duration_ms=self._elapsed_ms(started_at),
+        )
+
+        return {
+            "approval_decision": decision,
+            "approval_revision_count": revision_count,
+            "current_stage": "approval_decision",
+            "status": "running",
+            "audit_events": [
+                *state.get("audit_events", []),
+                event,
+            ],
+        }
+
+    def review_approval_decision(
+        self,
+        state: WorkflowState,
+    ) -> WorkflowState:
+        """Have the independent critic accept or challenge the decision."""
+
+        started_at = perf_counter()
+
+        try:
+            invoice = state.get("invoice")
+            validation_result = state.get("validation_result")
+            policy = state.get("approval_policy")
+            decision = state.get("approval_decision")
+
+            if invoice is None:
+                raise ValueError(
+                    "Workflow state does not contain an invoice."
+                )
+
+            if validation_result is None:
+                raise ValueError(
+                    "Workflow state does not contain a validation result."
+                )
+
+            if policy is None:
+                raise ValueError(
+                    "Workflow state does not contain an approval policy."
+                )
+
+            if decision is None:
+                raise ValueError(
+                    "Workflow state does not contain an approval decision."
+                )
+
+            critique = self._dependencies.approval_critic.review(
+                invoice,
+                validation_result,
+                policy,
+                decision,
+            )
+
+        except Exception as exc:
+            return self._failure_update(
+                state=state,
+                stage="approval_critique",
+                started_at=started_at,
+                exc=exc,
+            )
+
+        event = AuditEvent(
+            stage="approval_critique",
+            status="succeeded",
+            message=(
+                f"Approval critic verdict: {critique.verdict}."
+            ),
+            duration_ms=self._elapsed_ms(started_at),
+        )
+
+        return {
+            "approval_critique": critique,
+            "current_stage": "approval_critique",
+            "status": "running",
+            "audit_events": [
+                *state.get("audit_events", []),
+                event,
+            ],
+        }
+
+    def finalize_approval(
+        self,
+        state: WorkflowState,
+    ) -> WorkflowState:
+        """Finalize a decision only after the critic has accepted it."""
+
+        started_at = perf_counter()
+
+        try:
+            decision = state.get("approval_decision")
+            critique = state.get("approval_critique")
+
+            if decision is None:
+                raise ValueError(
+                    "Workflow state does not contain an approval decision."
+                )
+
+            if critique is None:
+                raise ValueError(
+                    "Workflow state does not contain an approval critique."
+                )
+
+            if critique.verdict != "accept":
+                raise ValueError(
+                    "Cannot finalize a decision the critic did not accept."
+                )
+
+        except Exception as exc:
+            return self._failure_update(
+                state=state,
+                stage="approval_finalization",
+                started_at=started_at,
+                exc=exc,
+            )
+
+        event = AuditEvent(
+            stage="approval_finalization",
+            status="succeeded",
+            message=(
+                f"Final approval decision: {decision.decision}."
+            ),
+            duration_ms=self._elapsed_ms(started_at),
+        )
+
+        return {
             "current_stage": "completed",
             "status": "completed",
+            "audit_events": [
+                *state.get("audit_events", []),
+                event,
+            ],
+        }
+
+    def escalate_manual_review(
+        self,
+        state: WorkflowState,
+    ) -> WorkflowState:
+        """Stop safely when the bounded reflection loop cannot converge."""
+
+        started_at = perf_counter()
+        revision_count = state.get(
+            "approval_revision_count",
+            0,
+        )
+
+        event = AuditEvent(
+            stage="manual_review",
+            status="succeeded",
+            message=(
+                "Approval could not converge after "
+                f"{revision_count} revision(s); escalated for "
+                "manual review."
+            ),
+            duration_ms=self._elapsed_ms(started_at),
+        )
+
+        return {
+            "current_stage": "manual_review",
+            "status": "manual_review",
             "audit_events": [
                 *state.get("audit_events", []),
                 event,

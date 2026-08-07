@@ -5,6 +5,11 @@ from typing import Literal, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from invoice_system.approval import (
+    ApprovalCritique,
+    ApprovalDecision,
+    ApprovalPolicyAssessment,
+)
 from invoice_system.documents import LoadedDocument
 from invoice_system.models import Invoice, ValidationResult
 
@@ -13,18 +18,29 @@ ProcessingStage = Literal[
     "document_loading",
     "ingestion",
     "validation",
+    "approval_policy",
+    "approval_decision",
+    "approval_critique",
+    "approval_finalization",
+    "manual_review",
 ]
 
 CurrentStage = Literal[
     "document_loading",
     "ingestion",
     "validation",
+    "approval_policy",
+    "approval_decision",
+    "approval_critique",
+    "approval_finalization",
+    "manual_review",
     "completed",
 ]
 
 WorkflowStatus = Literal[
     "running",
     "completed",
+    "manual_review",
     "failed",
 ]
 
@@ -75,6 +91,11 @@ class WorkflowState(TypedDict, total=False):
     document: LoadedDocument
     invoice: Invoice
     validation_result: ValidationResult
+
+    approval_policy: ApprovalPolicyAssessment
+    approval_decision: ApprovalDecision
+    approval_critique: ApprovalCritique
+    approval_revision_count: int
 
     current_stage: CurrentStage
     status: WorkflowStatus
